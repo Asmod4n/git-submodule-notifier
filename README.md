@@ -94,7 +94,20 @@ and a mention does not.
 
 ## What it does not cover
 
-**Dependencies that are not submodules.** A package manifest pinning
-`:github => ..., :branch => ...` floats by definition, and this never
-sees it. If that is how most of your dependencies are pinned, this
-watches the smaller half of your exposure.
+**A submodule pinned to a branch**, which is skipped on purpose: it is
+already moving on its own and has nothing to report. Only a submodule at
+an exact tag has a "you are behind" question worth asking.
+
+**Vendored source copied in without a submodule.** A directory holding
+somebody else's code with no gitlink and no upstream URL is invisible
+here — nothing records where it came from, so nothing can check it. That
+is the real argument for making a vendored dependency a submodule even
+when you never intend to move it.
+
+Note what is *not* a gap. A package manifest pinning your own
+repositories — `:github => 'you/your-gem'` — needs no notifier: there is
+no upstream to fall behind, and you know when they change because you
+changed them. The third-party code lives one layer down, vendored inside
+those repositories as submodules, which is exactly where this runs. The
+two layers are not two halves of one problem; only the lower one has
+anything to notify about.
