@@ -1,0 +1,167 @@
+# Reusable: watch every tag-pinned submodule for a new release.
+#
+# Written once, called from every repository. A caller is ~10 lines:
+#
+#   name: deps upstream
+#   on:
+#     schedule: [{cron: '17 6 * * 1'}]
+#     workflow_dispatch:
+#   permissions: {contents: read, issues: write}
+#   jobs:
+#     check:
+#       uses: asmod4n/webmachine-mruby/.github/workflows/deps-upstream.yml@main
+#       with:
+#         notify: '@asmod4n'
+#
+# The schedule has to live in the caller - GitHub does not let a reusable
+# workflow bring its own trigger - but nothing else does. Everything below
+# is repository-agnostic: it reads .gitmodules, so a repo with no
+# submodules runs it and does nothing, and a repo that adds one later is
+# covered without touching this file or that one.
+#
+# Why pinned submodules need watching at all: a tag never moves, which is
+# the point of pinning and also the whole risk. Nobody notices a release,
+# and for anything that parses untrusted bytes - a compression library, a
+# TLS stack, a parser - "nobody noticed" is how a fixed CVE stays unfixed.
+# This never changes a pin. It opens an issue and a human decides.
+#
+# One issue per submodule, found by label rather than by title: the title
+# carries the version and changes every release, so matching on it would
+# open a second issue for 2.3.5 while the one about 2.3.4 was still open.
+# Issues are edited in place as newer releases appear, and closed
+# automatically once the pin is moved past them - so an open issue always
+# describes the repository now, not the day it was filed.
+name: deps upstream (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      notify:
+        description: 'Who to @-mention so GitHub sends mail, e.g. @octocat'
+        required: false
+        type: string
+        default: ''
+      label_prefix:
+        description: 'Label namespace for the tracking issues'
+        required: false
+        type: string
+        default: 'deps'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Two runs racing would both find no issue and both create one, which
+    # is the single failure this whole design exists to avoid.
+    concurrency:
+      group: deps-upstream-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Check every submodule against its own upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTIFY: ${{ inputs.notify }}
+          LABEL_PREFIX: ${{ inputs.label_prefix }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f .gitmodules ]; then
+            echo "no .gitmodules - nothing to watch"
+            exit 0
+          fi
+
+          # `git config -f` rather than parsing the file by hand: the
+          # format allows continuations and quoting that a grep gets wrong.
+          git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
+            | while read -r key path; do
+            name="${key#submodule.}"; name="${name%.path}"
+            url="$(git config -f .gitmodules --get "submodule.$name.url" || true)"
+            label="$LABEL_PREFIX: $(basename "$path")"
+
+            if [ -z "$url" ] || [ ! -d "$path/.git" ] && [ ! -f "$path/.git" ]; then
+              echo "$path: not checked out, skipping"
+              continue
+            fi
+
+            # Only submodules pinned to a tag are watchable. One tracking a
+            # branch is already moving on its own and has nothing to report.
+            pinned="$(git -C "$path" describe --tags --exact-match HEAD 2>/dev/null || true)"
+            if [ -z "$pinned" ]; then
+              echo "$path: not at a tag, skipping"
+              continue
+            fi
+
+            # Stable releases only. The ^N.N.N$ filter drops -RC and -beta,
+            # which are not what a pinned dependency should be nudged
+            # toward. A leading v is tolerated and compared without it.
+            latest="$(git ls-remote --tags --refs "$url" 2>/dev/null \
+                      | awk -F/ '{print $NF}' \
+                      | grep -E '^v?[0-9]+(\.[0-9]+)+$' \
+                      | sed 's/^v//' | sort -V | tail -1 || true)"
+            if [ -z "$latest" ]; then
+              echo "$path: no comparable tags upstream, skipping"
+              continue
+            fi
+
+            gh label create "$label" \
+              --description "Automated: $(basename "$path") release tracking" \
+              --color 0e8a16 >/dev/null 2>&1 || true
+
+            existing="$(gh issue list --label "$label" --state open --limit 1 \
+                        --json number --jq '.[0].number // empty')"
+
+            bare="${pinned#v}"
+            newest="$(printf '%s\n%s\n' "$bare" "$latest" | sort -V | tail -1)"
+            if [ "$bare" = "$latest" ] || [ "$newest" = "$bare" ]; then
+              if [ -n "$existing" ]; then
+                gh issue close "$existing" \
+                  --comment "\`$path\` is pinned at \`$pinned\`, which is current. Closing."
+              fi
+              echo "$path: $pinned is current"
+              continue
+            fi
+
+            title="$(basename "$path") $latest is out (pinned: $pinned)"
+            body=$(cat <<EOF
+          ${NOTIFY}
+
+          \`$path\` is pinned at **$pinned**. Upstream's latest stable tag is
+          **$latest**.
+
+          Opened by the reusable \`deps-upstream\` workflow. It keeps exactly
+          one open issue per submodule, edits this one in place as further
+          releases appear, and closes it once the pin is moved to $latest or
+          later. **Nothing in this repository has been changed.**
+
+          - Read the release notes for **security fixes** first. A pinned
+            dependency that parses untrusted input is where a missed CVE
+            costs the most.
+          - Check whether any API you rely on changed shape, not just
+            whether it still compiles.
+          - Bump: \`git -C $path fetch --tags && git -C $path checkout $latest\`,
+            then commit the submodule pointer.
+          - Run the test suite, and take any before/after measurement while
+            **both** versions still exist - afterwards is too late.
+          EOF
+          )
+
+            if [ -n "$existing" ]; then
+              gh issue edit "$existing" --title "$title" --body "$body"
+              echo "$path: updated issue #$existing"
+            else
+              # Assignment notifies as well, but fails silently when the
+              # account cannot be assigned on this repo; the @-mention in
+              # the body does not, so it is the one that must be there.
+              gh issue create --title "$title" --body "$body" --label "$label" \
+                --assignee "${NOTIFY#@}" >/dev/null 2>&1 \
+                || gh issue create --title "$title" --body "$body" --label "$label"
+              echo "$path: opened an issue for $latest"
+            fi
+          done
