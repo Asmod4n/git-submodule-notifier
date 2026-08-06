@@ -1,6 +1,6 @@
 # Reusable: watch every tag-pinned submodule for a new release.
 #
-# Written once, called from every repository. A caller is ~10 lines:
+# Written once, called from every repository. A caller is this, whole:
 #
 #   name: deps upstream
 #   on:
@@ -9,9 +9,15 @@
 #   permissions: {contents: read, issues: write}
 #   jobs:
 #     check:
-#       uses: asmod4n/webmachine-mruby/.github/workflows/deps-upstream.yml@main
+#       uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@v1.0.0
 #       with:
 #         notify: '@asmod4n'
+#
+# Pinned to a tag, not @main, and not incidentally: this runs with
+# `issues: write` in the *calling* repository, so @main would mean any
+# commit here executing with write access everywhere it is called. A
+# repository that exists to stop dependencies drifting unnoticed does not
+# get to float on its own default branch.
 #
 # The schedule has to live in the caller - GitHub does not let a reusable
 # workflow bring its own trigger - but nothing else does. Everything below
