@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   check:
-    uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@main
+    uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@v1.0.0
     with:
       notify: '@your-github-handle'
 ```
@@ -45,6 +45,25 @@ jobs:
 That is the whole per-repository cost. The schedule has to live in the
 caller because GitHub does not let a reusable workflow bring its own
 trigger; nothing else does.
+
+### Pin the ref, and note that `@main` would be a joke here
+
+`@v1.0.0`, not `@main`. A tool that exists to stop dependencies drifting
+unnoticed has no business telling you to float on its own default branch,
+and the reason is not only tidiness: this workflow runs with
+`issues: write` **in your repository**, so `@main` means any commit to
+this branch executes with write access everywhere it is called.
+
+A tag is the readable choice. A full commit SHA is the stricter one,
+because a git tag can be moved and a SHA cannot:
+
+```yaml
+    uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@<sha>  # v1.0.0
+```
+
+Either way you are opting into a version rather than into whatever landed
+this morning - which is the entire argument this repository makes about
+submodules, applied to itself.
 
 Nothing in it is repository-specific: it reads `.gitmodules`, so it
 covers whatever is pinned today, anything added later without either file
