@@ -1,42 +1,5 @@
-# Reusable: watch every tag-pinned submodule for a new release.
-#
-# Written once, called from every repository. A caller is this, whole:
-#
-#   name: deps upstream
-#   on:
-#     schedule: [{cron: '17 6 * * 1'}]
-#     workflow_dispatch:
-#   permissions: {contents: read, issues: write}
-#   jobs:
-#     check:
-#       uses: Asmod4n/git-submodule-notifier/.github/workflows/deps-upstream.yml@v1.0.0
-#       with:
-#         notify: '@asmod4n'
-#
-# Pinned to a tag, not @main, and not incidentally: this runs with
-# `issues: write` in the *calling* repository, so @main would mean any
-# commit here executing with write access everywhere it is called. A
-# repository that exists to stop dependencies drifting unnoticed does not
-# get to float on its own default branch.
-#
-# The schedule has to live in the caller - GitHub does not let a reusable
-# workflow bring its own trigger - but nothing else does. Everything below
-# is repository-agnostic: it reads .gitmodules, so a repo with no
-# submodules runs it and does nothing, and a repo that adds one later is
-# covered without touching this file or that one.
-#
-# Why pinned submodules need watching at all: a tag never moves, which is
-# the point of pinning and also the whole risk. Nobody notices a release,
-# and for anything that parses untrusted bytes - a compression library, a
-# TLS stack, a parser - "nobody noticed" is how a fixed CVE stays unfixed.
-# This never changes a pin. It opens an issue and a human decides.
-#
-# One issue per submodule, found by label rather than by title: the title
-# carries the version and changes every release, so matching on it would
-# open a second issue for 2.3.5 while the one about 2.3.4 was still open.
-# Issues are edited in place as newer releases appear, and closed
-# automatically once the pin is moved past them - so an open issue always
-# describes the repository now, not the day it was filed.
+# Opens an issue when a tag-pinned submodule has a newer upstream tag.
+# Never moves a pin. See README.md for the caller snippet.
 name: deps upstream (reusable)
 
 on:
@@ -60,8 +23,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Two runs racing would both find no issue and both create one, which
-    # is the single failure this whole design exists to avoid.
+    # Two racing runs would both find no issue and both create one.
     concurrency:
       group: deps-upstream-${{ github.repository }}
       cancel-in-progress: false
@@ -83,8 +45,7 @@ jobs:
             exit 0
           fi
 
-          # `git config -f` rather than parsing the file by hand: the
-          # format allows continuations and quoting that a grep gets wrong.
+          # git config, not grep: .gitmodules allows continuations and quoting.
           git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
             | while read -r key path; do
             name="${key#submodule.}"; name="${name%.path}"
@@ -96,17 +57,14 @@ jobs:
               continue
             fi
 
-            # Only submodules pinned to a tag are watchable. One tracking a
-            # branch is already moving on its own and has nothing to report.
+            # A branch-pinned submodule already moves; nothing to report.
             pinned="$(git -C "$path" describe --tags --exact-match HEAD 2>/dev/null || true)"
             if [ -z "$pinned" ]; then
               echo "$path: not at a tag, skipping"
               continue
             fi
 
-            # Stable releases only. The ^N.N.N$ filter drops -RC and -beta,
-            # which are not what a pinned dependency should be nudged
-            # toward. A leading v is tolerated and compared without it.
+            # Stable tags only; a leading v is tolerated and compared without.
             latest="$(git ls-remote --tags --refs "$url" 2>/dev/null \
                       | awk -F/ '{print $NF}' \
                       | grep -E '^v?[0-9]+(\.[0-9]+)+$' \
@@ -141,20 +99,13 @@ jobs:
           \`$path\` is pinned at **$pinned**. Upstream's latest stable tag is
           **$latest**.
 
-          Opened by the reusable \`deps-upstream\` workflow. It keeps exactly
-          one open issue per submodule, edits this one in place as further
-          releases appear, and closes it once the pin is moved to $latest or
-          later. **Nothing in this repository has been changed.**
+          Opened by \`deps-upstream\`. One issue per submodule, edited in
+          place as further releases appear, closed once the pin moves.
+          **Nothing here has been changed.**
 
-          - Read the release notes for **security fixes** first. A pinned
-            dependency that parses untrusted input is where a missed CVE
-            costs the most.
-          - Check whether any API you rely on changed shape, not just
-            whether it still compiles.
+          - Read the release notes for **security fixes** first.
           - Bump: \`git -C $path fetch --tags && git -C $path checkout $latest\`,
             then commit the submodule pointer.
-          - Run the test suite, and take any before/after measurement while
-            **both** versions still exist - afterwards is too late.
           EOF
           )
 
@@ -162,9 +113,7 @@ jobs:
               gh issue edit "$existing" --title "$title" --body "$body"
               echo "$path: updated issue #$existing"
             else
-              # Assignment notifies as well, but fails silently when the
-              # account cannot be assigned on this repo; the @-mention in
-              # the body does not, so it is the one that must be there.
+              # Assignment fails silently on some repos; the mention does not.
               gh issue create --title "$title" --body "$body" --label "$label" \
                 --assignee "${NOTIFY#@}" >/dev/null 2>&1 \
                 || gh issue create --title "$title" --body "$body" --label "$label"
