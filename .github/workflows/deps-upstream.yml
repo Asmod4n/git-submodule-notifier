@@ -64,10 +64,19 @@ jobs:
               continue
             fi
 
-            # Stable tags only; a leading v is tolerated and compared without.
+            # Stable tags only. The text before the first digit of the pin,
+            # such as "boost-", must stand before the upstream tag too. A
+            # leading v is tolerated and compared without.
+            prefix="${pinned%%[0-9]*}"
+            [ "$prefix" = "v" ] && prefix=""
             latest="$(git ls-remote --tags --refs "$url" 2>/dev/null \
                       | awk -F/ '{print $NF}' \
-                      | grep -E '^v?[0-9]+(\.[0-9]+)+$' \
+                      | grep -F -- "$prefix" \
+                      | while read -r tag; do
+                          rest="${tag#"$prefix"}"
+                          [ "${tag:0:${#prefix}}" = "$prefix" ] || continue
+                          printf '%s\n' "$rest" | grep -E '^v?[0-9]+(\.[0-9]+)+$' || true
+                        done \
                       | sed 's/^v//' | sort -V | tail -1 || true)"
             if [ -z "$latest" ]; then
               echo "$path: no comparable tags upstream, skipping"
@@ -81,7 +90,7 @@ jobs:
             existing="$(gh issue list --label "$label" --state open --limit 1 \
                         --json number --jq '.[0].number // empty')"
 
-            bare="${pinned#v}"
+            bare="${pinned#"$prefix"}"; bare="${bare#v}"
             newest="$(printf '%s\n%s\n' "$bare" "$latest" | sort -V | tail -1)"
             if [ "$bare" = "$latest" ] || [ "$newest" = "$bare" ]; then
               if [ -n "$existing" ]; then
@@ -92,19 +101,19 @@ jobs:
               continue
             fi
 
-            title="$(basename "$path") $latest is out (pinned: $pinned)"
+            title="$(basename "$path") $prefix$latest is out (pinned: $pinned)"
             body=$(cat <<EOF
           ${NOTIFY}
 
           \`$path\` is pinned at **$pinned**. Upstream's latest stable tag is
-          **$latest**.
+          **$prefix$latest**.
 
           Opened by \`deps-upstream\`. One issue per submodule, edited in
           place as further releases appear, closed once the pin moves.
           **Nothing here has been changed.**
 
           - Read the release notes for **security fixes** first.
-          - Bump: \`git -C $path fetch --tags && git -C $path checkout $latest\`,
+          - Bump: \`git -C $path fetch --tags && git -C $path checkout $prefix$latest\`,
             then commit the submodule pointer.
           EOF
           )

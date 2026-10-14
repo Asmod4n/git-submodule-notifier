@@ -41,7 +41,9 @@ repository.
 
 - Reads `.gitmodules`; nothing is repository-specific.
 - A submodule pinned to a **branch** is skipped — it already moves.
-- Stable tags only (`^v?N.N.N$`), compared with `sort -V`.
+- Stable tags only (`^v?N.N.N$`), compared with `sort -V`. Text before
+  the first digit of the pin, such as `boost-`, must stand before the
+  upstream tag too, and is compared without.
 - One issue per submodule, found by label, edited as further releases
   appear, closed once the pin moves past it.
 
