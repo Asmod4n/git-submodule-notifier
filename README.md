@@ -1,7 +1,8 @@
 # git-submodule-notifier
 
-Opens a GitHub issue when a tag-pinned submodule has a newer upstream
-tag. It never moves a pin.
+Opens a GitHub issue when a submodule is behind upstream: a newer
+stable tag for a submodule pinned to a tag, a newer head of the default
+branch for a submodule pinned to a commit. It never moves a pin.
 
 ## Use it
 
@@ -42,6 +43,8 @@ repository.
 - Reads `.gitmodules`; nothing is repository-specific.
 - A submodule pinned to a **branch** is skipped — it already moves.
 - Stable tags only (`^v?N.N.N$`), compared with `sort -V`.
+- A submodule not at a tag is compared with upstream `HEAD`; the issue
+  lists the commits it is behind.
 - One issue per submodule, found by label, edited as further releases
   appear, closed once the pin moves past it.
 

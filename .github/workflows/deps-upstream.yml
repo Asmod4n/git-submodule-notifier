@@ -1,4 +1,5 @@
-# Opens an issue when a tag-pinned submodule has a newer upstream tag.
+# Opens an issue when a submodule is behind upstream: a newer stable tag
+# for a tag pin, a newer head of the default branch for a commit pin.
 # Never moves a pin. See README.md for the caller snippet.
 name: deps upstream (reusable)
 
@@ -58,9 +59,78 @@ jobs:
             fi
 
             # A branch-pinned submodule already moves; nothing to report.
+            if git config -f .gitmodules --get "submodule.$name.branch" >/dev/null; then
+              echo "$path: follows a branch, skipping"
+              continue
+            fi
+
             pinned="$(git -C "$path" describe --tags --exact-match HEAD 2>/dev/null || true)"
             if [ -z "$pinned" ]; then
-              echo "$path: not at a tag, skipping"
+              # Pinned to a commit: compare it with the head of the default branch.
+              commit="$(git -C "$path" rev-parse HEAD)"
+              head="$(git ls-remote "$url" HEAD 2>/dev/null | awk '{print $1}' || true)"
+              if [ -z "$head" ]; then
+                echo "$path: upstream HEAD not readable, skipping"
+                continue
+              fi
+
+              gh label create "$label" \
+                --description "Automated: $(basename "$path") upstream tracking" \
+                --color 0e8a16 >/dev/null 2>&1 || true
+
+              existing="$(gh issue list --label "$label" --state open --limit 1 \
+                          --json number --jq '.[0].number // empty')"
+
+              if [ "$commit" = "$head" ]; then
+                if [ -n "$existing" ]; then
+                  gh issue close "$existing" \
+                    --comment "\`$path\` is pinned at \`${commit:0:7}\`, the head of upstream. Closing."
+                fi
+                echo "$path: ${commit:0:7} is the upstream head"
+                continue
+              fi
+
+              # The submodule may be a shallow clone; fetch upstream HEAD to count.
+              git -C "$path" fetch --quiet "$url" HEAD 2>/dev/null || true
+              if git -C "$path" merge-base --is-ancestor "$commit" "$head" 2>/dev/null; then
+                behind="$(git -C "$path" rev-list --count "$commit..$head")"
+                state="$behind commits behind"
+                log="$(git -C "$path" log --oneline --no-decorate "$commit..$head" | head -n 20)"
+              else
+                state="not an ancestor of the upstream head"
+                log=""
+              fi
+
+              title="$(basename "$path") upstream moved (pinned: ${commit:0:7})"
+              body=$(cat <<EOF
+          ${NOTIFY}
+
+          \`$path\` is pinned at commit **${commit:0:7}**. The head of upstream
+          is **${head:0:7}**: the pin is $state.
+
+          \`\`\`
+          $log
+          \`\`\`
+
+          Opened by \`deps-upstream\`. One issue per submodule, edited in
+          place as upstream moves, closed once the pin reaches the head.
+          **Nothing here has been changed.**
+
+          - Read the commits for **security fixes** first.
+          - Bump: \`git -C $path fetch origin && git -C $path checkout ${head:0:7}\`,
+            then commit the submodule pointer.
+          EOF
+          )
+
+              if [ -n "$existing" ]; then
+                gh issue edit "$existing" --title "$title" --body "$body"
+                echo "$path: updated issue #$existing"
+              else
+                gh issue create --title "$title" --body "$body" --label "$label" \
+                  --assignee "${NOTIFY#@}" >/dev/null 2>&1 \
+                  || gh issue create --title "$title" --body "$body" --label "$label"
+                echo "$path: opened an issue for ${head:0:7}"
+              fi
               continue
             fi
 
